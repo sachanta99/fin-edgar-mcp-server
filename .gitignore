@@ -221,3 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# fin-edgar-mcp-server
+*.duckdb
+*.duckdb.wal
