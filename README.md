@@ -8,6 +8,10 @@ Every number it returns carries its source: the filing's accession number, the X
 tagged with, the period, the unit and the URL. Missing data comes back as an explicit
 `missing_metrics` entry, never a guess.
 
+![A live MCP session: get_company_financials returns Apple's revenue and net income with 10-K accession numbers, and get_macro_indicator returns the US unemployment rate, each with provenance](docs/demo.png)
+
+<sub>Real output from a live session over stdio, started with the same command as the Claude Desktop config below.</sub>
+
 ```
 You:    What were Apple's revenue and net income for the last 3 fiscal years? Cite the filings.
 Claude: (calls get_company_financials) and answers with each figure next to its 10-K accession number
@@ -63,7 +67,19 @@ absolute path to your clone:
 }
 ```
 
-Restart Claude Desktop. The four tools appear under the tools icon.
+Fully quit Claude Desktop (from the system tray or menu bar, not just the window) and reopen it.
+The four tools appear under the tools icon.
+
+**Keeping secrets out of the config file.** Instead of the `env` block, you can keep both values in
+the repo's `.env` file (copied from `.env.example`; it is gitignored) and have `uv` load it:
+
+```json
+"args": ["--directory", "/absolute/path/to/fin-edgar-mcp-server",
+         "run", "--env-file", "/absolute/path/to/fin-edgar-mcp-server/.env", "fin-edgar-mcp"]
+```
+
+Drop the `env` block. The key then lives in one place. On Windows, write the paths with forward
+slashes (`C:/Users/you/...`).
 
 ### Cursor
 
