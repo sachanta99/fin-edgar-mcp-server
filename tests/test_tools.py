@@ -7,6 +7,7 @@ import respx
 from fastmcp import Client
 
 from fin_edgar_mcp.config import Settings
+from fin_edgar_mcp.errors import InvalidInputError
 from fin_edgar_mcp.server import create_server
 from fin_edgar_mcp.services import Services
 
@@ -247,6 +248,35 @@ async def test_macro_without_key(make_services):
         assert msg.startswith("[config_missing]")
         # SEC tools still work without a FRED key.
         assert await call(c, "search_sec_filings", {"company": "AAPL", "limit": 1})
+
+
+async def test_direct_calls_accept_iso_date_strings(services: Services, mock_api: respx.MockRouter):
+    out = await services.get_macro_indicator("unemployment", start="2020-01-01", end="2020-12-31")
+    assert out.series_id == "UNRATE"
+    obs_request = mock_api.calls.last.request
+    assert obs_request.url.params["observation_start"] == "2020-01-01"
+    assert obs_request.url.params["observation_end"] == "2020-12-31"
+    filings = await services.search_sec_filings("AAPL", date_from="2000-01-01", limit=1)
+    assert filings.filings
+
+
+@pytest.mark.parametrize("bad", ["2020/01/01", "yesterday", 20200101])
+async def test_direct_calls_reject_bad_dates(services: Services, bad: Any):
+    with pytest.raises(InvalidInputError, match="YYYY-MM-DD"):
+        await services.get_macro_indicator("UNRATE", start=bad)
+
+
+async def test_direct_calls_report_sources_on_cache_hits(services: Services):
+    first = await services.get_macro_indicator("UNRATE")
+    second = await services.get_macro_indicator("UNRATE")
+    assert first.provenance.cache_hit is False
+    assert second.provenance.cache_hit is True
+    for prov in (first.provenance, second.provenance):
+        assert len(prov.source_urls) == 2  # series metadata + observations
+        assert all("api_key" not in u for u in prov.source_urls)
+    assert second.provenance.source_urls == first.provenance.source_urls
+    facts = await services.get_company_financials("AAPL", metrics=["revenue"])
+    assert facts.provenance.source_urls
 
 
 async def test_sec_without_user_agent(make_services):

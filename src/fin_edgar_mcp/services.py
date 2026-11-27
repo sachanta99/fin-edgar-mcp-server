@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Concatenate, ParamSpec, TypeVar
 
 from .cache import QUERYABLE_TABLES, Cache
 from .config import Settings
@@ -45,6 +47,48 @@ def build_provenance(record: CallRecord | None) -> Provenance:
         fetched_at=min(f.fetched_at for f in fetches),
         stale=any(f.stale for f in fetches),
     )
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_S = TypeVar("_S")
+
+
+def tracks_sources(
+    fn: Callable[Concatenate[_S, _P], Coroutine[Any, Any, _R]],
+) -> Callable[Concatenate[_S, _P], Coroutine[Any, Any, _R]]:
+    """Give a direct (non-MCP) call its own CallRecord so provenance lists its source URLs.
+
+    The MCP server sets a record per tool call; this only fills in when none is active.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(self: _S, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        if current_call.get() is not None:
+            return await fn(self, *args, **kwargs)
+        token = current_call.set(CallRecord())
+        try:
+            return await fn(self, *args, **kwargs)
+        finally:
+            current_call.reset(token)
+
+    return wrapper
+
+
+def coerce_date(value: date | str | None, name: str) -> date | None:
+    """Accept a date or an ISO 'YYYY-MM-DD' string, as the MCP tools do."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            pass
+    raise InvalidInputError(f"{name} must be a date in YYYY-MM-DD format, got {value!r}.")
 
 
 def _parse_date(value: Any) -> date | None:
@@ -97,6 +141,7 @@ class Services:
 
     # ---------- get_company_financials ----------
 
+    @tracks_sources
     async def get_company_financials(
         self,
         company: str,
@@ -199,15 +244,18 @@ class Services:
 
     # ---------- search_sec_filings ----------
 
+    @tracks_sources
     async def search_sec_filings(
         self,
         company: str | None = None,
         form_types: list[str] | None = None,
-        date_from: date | None = None,
-        date_to: date | None = None,
+        date_from: date | str | None = None,
+        date_to: date | str | None = None,
         query: str | None = None,
         limit: int = 20,
     ) -> FilingSearchResult:
+        date_from = coerce_date(date_from, "date_from")
+        date_to = coerce_date(date_to, "date_to")
         if not 1 <= limit <= MAX_FILING_LIMIT:
             raise InvalidInputError(f"limit must be between 1 and {MAX_FILING_LIMIT}.")
         if date_from and date_to and date_from > date_to:
@@ -342,13 +390,16 @@ class Services:
 
     # ---------- get_macro_indicator ----------
 
+    @tracks_sources
     async def get_macro_indicator(
         self,
         series: str,
-        start: date | None = None,
-        end: date | None = None,
+        start: date | str | None = None,
+        end: date | str | None = None,
         frequency: str | None = None,
     ) -> MacroSeries:
+        start = coerce_date(start, "start")
+        end = coerce_date(end, "end")
         if start and end and start > end:
             raise InvalidInputError("start is after end.")
         if frequency is not None and frequency not in FREQUENCIES:
